@@ -7,6 +7,7 @@ Run:
 
 from __future__ import annotations
 
+import argparse
 import os
 import sqlite3
 from typing import Any
@@ -94,16 +95,41 @@ def _query_invoices_by_customer_name(customer_name: str) -> dict[str, Any]:
         conn.close()
 
 
-mcp = FastMCP("invoice-sqlite-server")
+def _build_server(host: str, port: int, streamable_http_path: str) -> FastMCP:
+    return FastMCP(
+        "invoice-sqlite-server",
+        host=host,
+        port=port,
+        streamable_http_path=streamable_http_path,
+    )
 
 
-@mcp.tool()
-def get_invoices_by_customer_name(customer_name: str) -> dict[str, Any]:
-    """
-    Query invoices and line items by customer name (partial, case-insensitive).
-    """
-    return _query_invoices_by_customer_name(customer_name=customer_name)
+def _register_tools(server: FastMCP) -> None:
+    @server.tool()
+    def get_invoices_by_customer_name(customer_name: str) -> dict[str, Any]:
+        """
+        Query invoices and line items by customer name (partial, case-insensitive).
+        """
+        return _query_invoices_by_customer_name(customer_name=customer_name)
 
 
 if __name__ == "__main__":
-    mcp.run()
+    parser = argparse.ArgumentParser(description="Run invoice MCP server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse", "streamable-http"],
+        default="streamable-http",
+        help="MCP transport (default: streamable-http)",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host")
+    parser.add_argument("--port", type=int, default=8000, help="HTTP bind port")
+    parser.add_argument(
+        "--path",
+        default="/mcp",
+        help="Streamable HTTP path (default: /mcp)",
+    )
+    args = parser.parse_args()
+
+    mcp = _build_server(host=args.host, port=args.port, streamable_http_path=args.path)
+    _register_tools(mcp)
+    mcp.run(transport=args.transport)
