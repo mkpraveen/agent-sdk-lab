@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 import os
+import sqlite3
 
 # Load Environment Vars
 load_dotenv()
@@ -54,6 +55,93 @@ account_agent = Agent(
     tools=[get_membership_info]
 )
 
+# Define custom tool for Invoice Agent
+@function_tool
+def get_invoices_by_customer_name(customer_name: str) -> dict:
+    """Return invoices and line items for a customer name (partial match, case-insensitive)."""
+    db_path = os.path.join(os.path.dirname(__file__), "invoices.db")
+    if not os.path.exists(db_path):
+        return {
+            "error": "invoices.db not found",
+            "db_path": db_path,
+        }
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        customers = conn.execute(
+            """
+            SELECT customer_id, customer_name, email, phone, city, state, country
+            FROM customer_master
+            WHERE customer_name LIKE ? COLLATE NOCASE
+            ORDER BY customer_name
+            """,
+            (f"%{customer_name}%",),
+        ).fetchall()
+
+        if not customers:
+            return {
+                "customer_name_query": customer_name,
+                "customers": [],
+                "invoices": [],
+                "message": "No matching customers found.",
+            }
+
+        invoices_out = []
+        customers_out = [dict(row) for row in customers]
+
+        for cust in customers:
+            invoices = conn.execute(
+                """
+                SELECT invoice_id, invoice_number, customer_id, invoice_date, due_date,
+                       currency_code, status, subtotal_amount, tax_amount, total_amount, notes
+                FROM invoice_header
+                WHERE customer_id = ?
+                ORDER BY invoice_date, invoice_id
+                """,
+                (cust["customer_id"],),
+            ).fetchall()
+
+            for inv in invoices:
+                lines = conn.execute(
+                    """
+                    SELECT line_id, line_number, item_code, description, quantity, unit_price,
+                           discount_amount, tax_amount, line_total
+                    FROM invoice_line
+                    WHERE invoice_id = ?
+                    ORDER BY line_number
+                    """,
+                    (inv["invoice_id"],),
+                ).fetchall()
+
+                invoices_out.append(
+                    {
+                        "invoice": dict(inv),
+                        "lines": [dict(line) for line in lines],
+                        "customer": {
+                            "customer_id": cust["customer_id"],
+                            "customer_name": cust["customer_name"],
+                        },
+                    }
+                )
+
+        return {
+            "customer_name_query": customer_name,
+            "customers": customers_out,
+            "invoices": invoices_out,
+        }
+    finally:
+        conn.close()
+
+invoice_agent = Agent(
+    name="InvoiceAssistant",
+    instructions=(
+        "Lookup invoices for a given customer name using the get_invoices_by_customer_name tool. "
+        "Return a concise summary with invoice numbers, dates, totals, and line items."
+    ),
+    tools=[get_invoices_by_customer_name],
+)
+
 # Setup Triage Agent
 from agents.extensions.handoff_prompt import prompt_with_handoff_instructions
 triage_agent = Agent(
@@ -64,10 +152,11 @@ You are the virtual fitness assistant for FitLife. Welcome the user and ask how 
 Based on the user's intent, route to:
 - FitnessAccountAgent for membership queries,
 - FitnessKnowledgeAgent for workout or nutrition FAQs,
-- FitnessSearchAgent for general fitness trends or real-time info.
+- FitnessSearchAgent for general fitness trends or real-time info,
+- InvoiceAssistant for invoice lookups by customer name.
 """
     ),
-    handoffs=[account_agent, knowledge_agent, search_agent]
+    handoffs=[account_agent, knowledge_agent, search_agent, invoice_agent]
 )
 
 from agents import Runner, trace
@@ -78,6 +167,7 @@ async def test_queries():
     #   "What is my remaining session count? My user ID is 12345",
       "Tell me about the Fitness - Why Is Physical Activity So Important?",
     #   "What fitness trends are popular right now?",
+    "Provide invoice details for customer Pioneer Tech Co."
     ]
     with trace("FitLife Assistant Test"):
       for query in examples:
