@@ -87,43 +87,60 @@ def get_invoices_by_customer_name(customer_name: str) -> dict:
                 "message": "No matching customers found.",
             }
 
-        invoices_out = []
         customers_out = [dict(row) for row in customers]
+        customer_ids = [cust["customer_id"] for cust in customers]
+        cust_lookup = {c["customer_id"]: c["customer_name"] for c in customers}
 
-        for cust in customers:
-            invoices = conn.execute(
-                """
-                SELECT invoice_id, invoice_number, customer_id, invoice_date, due_date,
-                       currency_code, status, subtotal_amount, tax_amount, total_amount, notes
-                FROM invoice_header
-                WHERE customer_id = ?
-                ORDER BY invoice_date, invoice_id
-                """,
-                (cust["customer_id"],),
-            ).fetchall()
+        placeholders = ",".join("?" for _ in customer_ids)
+        invoices = conn.execute(
+            f"""
+            SELECT invoice_id, invoice_number, customer_id, invoice_date, due_date,
+                   currency_code, status, subtotal_amount, tax_amount, total_amount, notes
+            FROM invoice_header
+            WHERE customer_id IN ({placeholders})
+            ORDER BY invoice_date, invoice_id
+            """,
+            customer_ids,
+        ).fetchall()
 
-            for inv in invoices:
-                lines = conn.execute(
-                    """
-                    SELECT line_id, line_number, item_code, description, quantity, unit_price,
-                           discount_amount, tax_amount, line_total
-                    FROM invoice_line
-                    WHERE invoice_id = ?
-                    ORDER BY line_number
-                    """,
-                    (inv["invoice_id"],),
-                ).fetchall()
+        if not invoices:
+            return {
+                "customer_name_query": customer_name,
+                "customers": customers_out,
+                "invoices": [],
+            }
 
-                invoices_out.append(
-                    {
-                        "invoice": dict(inv),
-                        "lines": [dict(line) for line in lines],
-                        "customer": {
-                            "customer_id": cust["customer_id"],
-                            "customer_name": cust["customer_name"],
-                        },
-                    }
-                )
+        invoice_ids = [inv["invoice_id"] for inv in invoices]
+        line_placeholders = ",".join("?" for _ in invoice_ids)
+        lines = conn.execute(
+            f"""
+            SELECT line_id, invoice_id, line_number, item_code, description, quantity,
+                   unit_price, discount_amount, tax_amount, line_total
+            FROM invoice_line
+            WHERE invoice_id IN ({line_placeholders})
+            ORDER BY invoice_id, line_number
+            """,
+            invoice_ids,
+        ).fetchall()
+
+        lines_by_invoice: dict[int, list[dict]] = {}
+        for line in lines:
+            lines_by_invoice.setdefault(line["invoice_id"], []).append(dict(line))
+
+        invoices_out = []
+        for inv in invoices:
+            inv_id = inv["invoice_id"]
+            cust_id = inv["customer_id"]
+            invoices_out.append(
+                {
+                    "invoice": dict(inv),
+                    "lines": lines_by_invoice.get(inv_id, []),
+                    "customer": {
+                        "customer_id": cust_id,
+                        "customer_name": cust_lookup[cust_id],
+                    },
+                }
+            )
 
         return {
             "customer_name_query": customer_name,
