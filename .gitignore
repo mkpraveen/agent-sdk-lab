@@ -10,3 +10,6 @@ wheels/
 .venv
 
 .env
+snowflake_seed.sql
+snowflake_table.sql
+invoices.db

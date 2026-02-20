@@ -10,6 +10,24 @@ cd agent-sdk-lab
 uv sync
 ```
 
+## Create SQLite Database
+
+Create `invoices.db` from `schema.sql` and `seed.sql`:
+
+```bash
+cd agent-sdk-lab
+sqlite3 invoices.db < schema.sql
+sqlite3 invoices.db < seed.sql
+```
+
+Optional quick verification:
+
+```bash
+sqlite3 invoices.db "SELECT COUNT(*) AS invoice_count FROM invoice_header;"
+sqlite3 invoices.db "SELECT COUNT(*) AS line_count FROM invoice_line;"
+sqlite3 invoices.db "SELECT COUNT(*) AS customer_count FROM customer_master;"
+```
+
 ## Run MCP Server (HTTP)
 
 Default run (Streamable HTTP on `127.0.0.1:8000/mcp`):
